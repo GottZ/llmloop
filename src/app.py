@@ -3,6 +3,11 @@ import os
 import json
 import time
 import uuid
+import tempfile
+import zipfile
+import shutil
+import subprocess
+from pathlib import Path
 from flask import Flask, render_template, request, redirect, url_for, flash, session, Response, stream_with_context, jsonify
 from config import Config
 from db import init_db, wait_for_db, get_db_connection, get_active_backend
@@ -49,6 +54,73 @@ def estimate_tokens(text):
     parts = stripped.split()
     return max(1, len(parts))
 
+
+def _prepare_local_cwd(path):
+    return path if path else "/tmp"
+
+
+def _safe_relative_filename(filename):
+    if not filename:
+        return None
+    normalized = filename.replace("\\", "/").strip("/")
+    if not normalized:
+        return None
+    candidate = Path(normalized)
+    parts = []
+    for part in candidate.parts:
+        if part in ("", ".", ".."):
+            continue
+        parts.append(part)
+    if not parts:
+        return None
+    return "/".join(parts)
+
+
+def _prepare_upload_workspace(upload_files):
+    files = [f for f in upload_files if f and f.filename]
+    if not files:
+        raise ValueError("No files selected for upload.")
+    archive_dir = tempfile.mkdtemp(prefix="thread_upload_", dir="/tmp")
+    archive_path = os.path.join(archive_dir, "payload.zip")
+    wrote_any = False
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for storage in files:
+            rel_path = _safe_relative_filename(storage.filename)
+            if not rel_path:
+                continue
+            storage.stream.seek(0)
+            archive.writestr(rel_path, storage.read())
+            wrote_any = True
+    if not wrote_any:
+        shutil.rmtree(archive_dir, ignore_errors=True)
+        raise ValueError("Upload did not contain any files.")
+    workspace = tempfile.mkdtemp(prefix="thread_workspace_", dir="/tmp")
+    with zipfile.ZipFile(archive_path, "r") as archive:
+        archive.extractall(workspace)
+    shutil.rmtree(archive_dir, ignore_errors=True)
+    return workspace
+
+
+def _prepare_git_workspace(git_url):
+    if not git_url:
+        raise ValueError("Git URL is required.")
+    workspace = tempfile.mkdtemp(prefix="thread_git_", dir="/tmp")
+    try:
+        result = subprocess.run(
+            ["git", "clone", "--depth", "1", git_url, workspace],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=120,
+        )
+        if result.returncode != 0:
+            stderr = (result.stderr or "").strip()
+            raise ValueError(f"Git clone failed: {stderr[:200]}")
+        return workspace
+    except Exception:
+        shutil.rmtree(workspace, ignore_errors=True)
+        raise
+
 @app.route('/')
 def index():
     conn = get_db_connection()
@@ -63,7 +135,19 @@ def index():
 
 @app.route('/thread/new', methods=['POST'])
 def new_thread():
-    cwd = request.form.get('cwd', '/tmp')
+    source_type = request.form.get('source_type', 'local')
+    try:
+        if source_type == 'upload':
+            files = request.files.getlist('upload[]')
+            cwd = _prepare_upload_workspace(files)
+        elif source_type == 'git':
+            git_url = request.form.get('git_url', '').strip()
+            cwd = _prepare_git_workspace(git_url)
+        else:
+            cwd = _prepare_local_cwd(request.form.get('cwd', '/tmp').strip())
+    except ValueError as exc:
+        flash(str(exc), "danger")
+        return redirect(url_for('index'))
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("INSERT INTO threads (cwd, context_summary) VALUES (%s, '') RETURNING id", (cwd,))
@@ -338,12 +422,17 @@ def fork_thread(thread_id):
 def delete_thread(thread_id):
     conn = get_db_connection()
     cur = conn.cursor()
+    cur.execute("SELECT cwd FROM threads WHERE id = %s", (thread_id,))
+    row = cur.fetchone()
+    workspace = row[0] if row else None
     cur.execute("DELETE FROM threads WHERE id = %s", (thread_id,))
     cur.close()
     conn.close()
     PENDING_APPROVALS.pop(thread_id, None)
     clear_tokens(thread_id)
     clear_thread_status(thread_id)
+    if workspace and workspace.startswith("/tmp/thread_"):
+        shutil.rmtree(workspace, ignore_errors=True)
     flash(f"Thread #{thread_id} deleted.", "info")
     return redirect(url_for('index'))
 

@@ -41,7 +41,7 @@ Environment variables (see `docker-compose.yml`):
 
 ## Usage Flow
 
-1. Visit `/` to create a thread (set working directory path on the host/container).
+1. Visit `/` to create a thread. You can either point at an existing container path, upload a local folder (the server zips + unpacks it into `/tmp/thread_workspace_*`), or provide a Git URL that gets cloned into `/tmp/thread_git_*`.
 2. Open the thread to send messages. The UI streams new planner/tool outputs in real time via SSE, so you can keep the page open while the agent works.
 3. Use the toggles to adjust behavior:
    - `Enable Tools` – allow the Planner to dispatch intents.

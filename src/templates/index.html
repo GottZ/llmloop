@@ -12,12 +12,52 @@
 
 <div class="card">
     <h3>New Thread</h3>
-    <form action="/thread/new" method="post">
-        <label>Working Directory (CWD)</label>
-        <input type="text" name="cwd" value="/tmp" placeholder="/tmp">
+    <form action="/thread/new" method="post" enctype="multipart/form-data" id="new-thread-form">
+        <label>Source</label>
+        <select name="source_type" id="source-type">
+            <option value="local">Existing path (inside container)</option>
+            <option value="upload">Upload archive</option>
+            <option value="git">GitHub / Git clone URL</option>
+        </select>
+
+        <div id="local-input">
+            <label>Working Directory (CWD)</label>
+            <input type="text" name="cwd" value="/tmp" placeholder="/tmp">
+        </div>
+
+        <div id="upload-input" style="display:none;">
+            <label>Select files / folders</label>
+            <input type="file" webkitdirectory directory multiple name="upload[]" />
+            <small>Files are uploaded as an archive and unpacked into a temporary directory.</small>
+        </div>
+
+        <div id="git-input" style="display:none;">
+            <label>Git URL</label>
+            <input type="url" name="git_url" placeholder="https://github.com/user/repo.git">
+        </div>
+
         <button type="submit" class="btn">Create Thread</button>
     </form>
 </div>
+
+<script>
+(function() {
+    const select = document.getElementById('source-type');
+    if (!select) {
+        return;
+    }
+    const localBlock = document.getElementById('local-input');
+    const uploadBlock = document.getElementById('upload-input');
+    const gitBlock = document.getElementById('git-input');
+
+    select.addEventListener('change', function() {
+        const value = select.value;
+        localBlock.style.display = value === 'local' ? '' : 'none';
+        uploadBlock.style.display = value === 'upload' ? '' : 'none';
+        gitBlock.style.display = value === 'git' ? '' : 'none';
+    });
+})();
+</script>
 
 <div>
     {% for thread in threads %}
