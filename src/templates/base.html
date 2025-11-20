@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Agent Orchestrator</title>
+    <style>
+        :root {
+            --bg: #ffffff; --text: #333; --header: #f8f9fa; --border: #ddd;
+            --primary: #007bff; --danger: #dc3545; --warning: #ffc107;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #1e1e1e; --text: #ddd; --header: #2d2d2d; --border: #444;
+                --primary: #4da3ff; --danger: #ff6b6b; --warning: #ffca2c;
+            }
+        }
+        body { background: var(--bg); color: var(--text); font-family: sans-serif; margin: 0; padding: 0; }
+        header { background: var(--header); padding: 1rem; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+        a { color: var(--primary); text-decoration: none; }
+        .container { padding: 2rem; max-width: 900px; margin: 0 auto; }
+        .btn { padding: 0.5rem 1rem; border: none; cursor: pointer; background: var(--primary); color: white; border-radius: 4px; }
+        .btn-danger { background: var(--danger); }
+        .card { border: 1px solid var(--border); padding: 1rem; margin-bottom: 1rem; border-radius: 4px; }
+        input, textarea, select { background: var(--bg); color: var(--text); border: 1px solid var(--border); padding: 0.5rem; width: 100%; box-sizing: border-box; margin-bottom: 0.5rem; }
+        pre { background: rgba(127, 127, 127, 0.1); padding: 0.5rem; overflow-x: auto; }
+        .alert { padding: 1rem; margin-bottom: 1rem; border-radius: 4px; background: rgba(255, 193, 7, 0.2); border: 1px solid var(--warning); }
+        .alert-danger { background: rgba(220, 53, 69, 0.2); border: 1px solid var(--danger); }
+    </style>
+</head>
+<body>
+    <header>
+        <div>
+            <a href="/" style="font-weight: bold; font-size: 1.2rem;">Orchestrator</a>
+        </div>
+        <nav>
+            <a href="/admin/llm">LLM Admin</a>
+        </nav>
+    </header>
+    <div class="container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            {% for category, message in messages %}
+              <div class="alert alert-{{ category }}">{{ message }}</div>
+            {% endfor %}
+          {% endif %}
+        {% endwith %}
+        {% block content %}{% endblock %}
+    </div>
+</body>
+</html>

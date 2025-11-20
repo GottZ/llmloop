@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block content %}
+<div style="display:flex; justify-content:space-between; align-items:center;">
+    <h1>Thread #{{ thread.id }}</h1>
+    <div>
+        <form action="/thread/{{ thread.id }}/fork" method="post" style="display:inline;">
+            <button class="btn">Fork</button>
+        </form>
+    </div>
+</div>
+
+{% if pending_approval %}
+<div class="alert alert-warning">
+    <h3>Approval Required</h3>
+    <p>The Tool Runner wants to execute the following commands:</p>
+    <ul>
+        {% for cmd in pending_approval.commands %}
+        <li><code>{{ cmd }}</code></li>
+        {% endfor %}
+    </ul>
+    <form action="/thread/{{ thread.id }}/approve" method="post" style="display:inline;">
+        <button name="action" value="approve" class="btn">Approve & Run</button>
+        <button name="action" value="reject" class="btn btn-danger">Reject</button>
+    </form>
+</div>
+{% endif %}
+
+<div style="margin-bottom: 2rem;">
+    {% for msg in messages %}
+    <div class="card" style="border-left: 4px solid 
+        {% if msg.role == 'user' %}var(--primary)
+        {% elif msg.role == 'planner' %}#28a745
+        {% elif msg.role == 'tool_runner' %}#17a2b8
+        {% else %}#6c757d{% endif %};">
+        <strong>{{ msg.role|upper }}</strong> <small>{{ msg.created_at }}</small>
+        <pre style="white-space: pre-wrap;">{{ msg.content }}</pre>
+    </div>
+    {% endfor %}
+</div>
+
+{% if backend %}
+<div class="card">
+    <form action="/thread/{{ thread.id }}/send" method="post">
+        <textarea name="content" rows="4" placeholder="Type your message..." required></textarea>
+        <div style="display:flex; gap: 1rem; align-items:center;">
+            <label style="width:auto;"><input type="checkbox" name="use_tools" checked style="width:auto;"> Enable Tools</label>
+            <label style="width:auto;"><input type="checkbox" name="continuous_intent" checked style="width:auto;"> Continuous Intent</label>
+            <label style="width:auto;"><input type="checkbox" name="hitl" style="width:auto;"> Human-in-the-loop</label>
+            <button type="submit" class="btn" style="margin-left:auto;">Send</button>
+        </div>
+    </form>
+    <form action="/thread/{{ thread.id }}/retry" method="post" style="margin-top:1rem;">
+        <button class="btn btn-danger" style="font-size:0.8em;">Retry Last Operation</button>
+    </form>
+</div>
+{% else %}
+<div class="alert alert-danger">LLM Backend not configured.</div>
+{% endif %}
+
+{% endblock %}

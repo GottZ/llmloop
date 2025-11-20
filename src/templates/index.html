@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Threads</h1>
+
+{% if not backend %}
+<div class="alert alert-danger">
+    <strong>No Active LLM Backend!</strong> Please configure one in <a href="/admin/llm">Admin</a>.
+</div>
+{% else %}
+<p>Active Backend: <strong>{{ backend.name }}</strong></p>
+{% endif %}
+
+<div class="card">
+    <h3>New Thread</h3>
+    <form action="/thread/new" method="post">
+        <label>Working Directory (CWD)</label>
+        <input type="text" name="cwd" value="/tmp" placeholder="/tmp">
+        <button type="submit" class="btn">Create Thread</button>
+    </form>
+</div>
+
+<div>
+    {% for thread in threads %}
+    <div class="card">
+        <div style="display:flex; justify-content:space-between;">
+            <a href="/thread/{{ thread.id }}">Thread #{{ thread.id }}</a>
+            <small>{{ thread.created_at }}</small>
+        </div>
+        <small>CWD: {{ thread.cwd }}</small><br>
+        {% if thread.context_summary %}
+        <div style="font-size:0.9em; margin-top:0.5rem; color:#888;">
+            <em>Summary: {{ thread.context_summary[:100] }}...</em>
+        </div>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+{% endblock %}
