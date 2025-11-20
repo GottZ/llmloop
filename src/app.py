@@ -8,6 +8,7 @@ from config import Config
 from db import init_db, wait_for_db, get_db_connection, get_active_backend
 from orchestrator import Orchestrator
 from llm_client import list_models, LLMError
+from token_stream import pop_tokens, clear_tokens
 
 # Fix import path for docker
 sys.path.append(os.path.dirname(os.path.abspath(__file__)) + "/..")
@@ -128,6 +129,9 @@ def thread_events(thread_id):
                         "commands": pending['commands'] if pending else []
                     }
                     yield f"data: {json.dumps(payload)}\n\n"
+                token_chunks = pop_tokens(thread_id)
+                for chunk in token_chunks:
+                    yield f"data: {json.dumps({'type': 'token', **chunk})}\n\n"
                 status_state = get_thread_status(thread_id)
                 if status_state['token'] != last_status_token:
                     last_status_token = status_state['token']
@@ -148,12 +152,14 @@ def send_message(thread_id):
     use_tools = 'use_tools' in request.form
     hitl = 'hitl' in request.form
     continuous_intent = 'continuous_intent' in request.form
+    stream_tokens = 'stream_tokens' in request.form
     wants_json = request.accept_mimetypes.best_match(['application/json', 'text/html']) == 'application/json'
     
     orch = Orchestrator(thread_id)
+    orch.stream_tokens = stream_tokens
     set_thread_status(thread_id, "running")
     try:
-        result = orch.process_user_message(user_input, use_tools, hitl, continuous_intent)
+        result = orch.process_user_message(user_input, use_tools, hitl, continuous_intent, stream_tokens)
     except Exception:
         set_thread_status(thread_id, "idle")
         raise
@@ -164,6 +170,7 @@ def send_message(thread_id):
         pending = dict(result)
         pending['continuous_intent'] = continuous_intent
         pending['token'] = uuid.uuid4().hex
+        pending['stream_tokens'] = stream_tokens
         PENDING_APPROVALS[thread_id] = pending
         set_thread_status(thread_id, "waiting_approval")
         if not wants_json:
@@ -200,6 +207,7 @@ def approve_tools(thread_id):
 
     # Resume
     orch = Orchestrator(thread_id)
+    orch.stream_tokens = pending.get('stream_tokens', False)
     set_thread_status(thread_id, "running")
     continuous_intent = pending.get('continuous_intent', True)
     try:
@@ -239,6 +247,7 @@ def retry_last(thread_id):
          return redirect(url_for('view_thread', thread_id=thread_id))
 
     orch = Orchestrator(thread_id)
+    orch.stream_tokens = False
     set_thread_status(thread_id, "running")
 
     # If the last response was from the planner, reuse its TOOL_INTENT so the
@@ -304,6 +313,7 @@ def delete_thread(thread_id):
     cur.close()
     conn.close()
     PENDING_APPROVALS.pop(thread_id, None)
+    clear_tokens(thread_id)
     clear_thread_status(thread_id)
     flash(f"Thread #{thread_id} deleted.", "info")
     return redirect(url_for('index'))

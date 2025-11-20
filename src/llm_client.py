@@ -22,7 +22,7 @@ def list_models(backend):
     except requests.RequestException as e:
         raise LLMError(f"Network error listing models: {str(e)}", "network_error")
 
-def call_llm(role, messages, tool_choice="none"):
+def call_llm(role, messages, tool_choice="none", stream=False, token_callback=None):
     backend = get_active_backend()
     if not backend:
         raise LLMError("No active LLM backend configured", "no_backend")
@@ -50,13 +50,46 @@ def call_llm(role, messages, tool_choice="none"):
     if "extra_body" in params:
         payload.update(params["extra_body"])
 
+    if stream:
+        payload["stream"] = True
     try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=60)
-        if resp.status_code != 200:
-            raise LLMError(f"LLM API Error: {resp.text[:200]}...", "api_error", resp.status_code, resp.text)
-        
-        data = resp.json()
-        return data['choices'][0]['message']['content']
+        if stream:
+            with requests.post(url, headers=headers, json=payload, stream=True, timeout=60) as resp:
+                if resp.status_code != 200:
+                    raise LLMError(f"LLM API Error: {resp.text[:200]}...", "api_error", resp.status_code, resp.text)
+                collected = []
+                for line in resp.iter_lines(decode_unicode=True):
+                    if not line:
+                        continue
+                    if line.strip().startswith(":"):
+                        # comment/keep-alive
+                        continue
+                    if line.strip().startswith("data:"):
+                        data_str = line.split("data:", 1)[1].strip()
+                    else:
+                        data_str = line.strip()
+                    if not data_str:
+                        continue
+                    if data_str == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        continue
+                    delta = chunk.get("choices", [{}])[0].get("delta", {})
+                    text = delta.get("content")
+                    if text:
+                        collected.append(text)
+                        if token_callback:
+                            token_callback(text)
+                return "".join(collected)
+        else:
+            resp = requests.post(url, headers=headers, json=payload, timeout=60)
+            if resp.status_code != 200:
+                raise LLMError(f"LLM API Error: {resp.text[:200]}...", "api_error", resp.status_code, resp.text)
+            
+            data = resp.json()
+            return data['choices'][0]['message']['content']
     except requests.RequestException as e:
         raise LLMError(f"Network error calling LLM: {str(e)}", "network_error")
     except (KeyError, IndexError, json.JSONDecodeError) as e:

@@ -9,6 +9,7 @@ An experimental web UI (Flask) plus orchestration layer that lets you spin up �
 - **Live UI & HITL** – The thread view streams messages/approvals via Server-Sent Events (SSE) while you type, and still supports HITL approvals, retries, and forks (`src/app.py`, `src/templates/thread.html`).
 - **LLM backend management** – Admin screen for selecting/modifying backends and per-role model params (`src/templates/llm_admin.html`).
 - **Postgres persistence** – Threads, messages, tool runs, and backend configs are stored relationally (`src/db.py`).
+- **Optional token streaming** – Enable real-time token streaming per message to watch planner/tool-runner outputs appear before the final message is stored.
 
 ## Architecture Overview
 
@@ -46,6 +47,7 @@ Environment variables (see `docker-compose.yml`):
    - `Enable Tools` – allow the Planner to dispatch intents.
    - `Continuous Intent` – automatically continue tool execution if the Planner responds with another `<TOOL_INTENT>`.
    - `Human-in-the-loop` – require approval before shell commands run.
+   - `Stream Tokens` – stream planner/tool-runner tokens live over SSE for incremental feedback (falls back to batched messages when unchecked).
 4. When the Planner asks for tools, the Tool Runner executes `RUN:` commands and returns `TOOL_RESULT` or `TOOL_CONTEXT` entries. Approvals can be granted/denied via the UI banner, which updates live from the SSE feed.
 5. Use `Retry Last Operation` to re-drive the last Planner intent or re-run the planner loop if needed.
 6. Fork threads to branch from any point without losing history.

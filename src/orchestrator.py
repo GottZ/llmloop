@@ -8,6 +8,7 @@ from db import get_db_connection
 from llm_client import call_llm, LLMError
 from prompts import PLANNER_SYSTEM_PROMPT, TOOL_RUNNER_SYSTEM_PROMPT
 from psycopg2.extras import RealDictCursor
+from token_stream import push_token
 
 PLANNER_HISTORY_LIMIT = 6
 
@@ -18,6 +19,7 @@ class Orchestrator:
         self.thread_id = thread_id
         self.conn = get_db_connection()
         self._load_thread_context()
+        self.stream_tokens = False
 
     def _load_thread_context(self):
         with self.conn.cursor() as cur:
@@ -73,8 +75,9 @@ class Orchestrator:
                 VALUES (%s, %s, %s, %s, %s)
             """, (self.thread_id, command, stdout, stderr, exit_code))
 
-    def process_user_message(self, user_text, use_tools=True, hitl=False, continuous_intent=True):
+    def process_user_message(self, user_text, use_tools=True, hitl=False, continuous_intent=True, stream_tokens=False):
         self._save_message("user", user_text)
+        self.stream_tokens = stream_tokens
         return self.run_planner_loop(use_tools, hitl, continuous_intent)
 
     def run_planner_loop(self, use_tools, hitl, continuous_intent=True):
@@ -85,7 +88,7 @@ class Orchestrator:
                 messages.append({"role": "system", "content": f"Current Context: {self.context_summary}"})
             messages.extend(self._get_history(limit=PLANNER_HISTORY_LIMIT))
             
-            planner_response = call_llm("planner", messages)
+            planner_response = self._call_llm("planner", messages)
             self._save_message("planner", planner_response)
 
             # 2. Parse Planner Tags
@@ -115,7 +118,7 @@ class Orchestrator:
         while True:
             # Call Tool Runner
             try:
-                runner_resp = call_llm("tool_runner", tool_history)
+                runner_resp = self._call_llm("tool_runner", tool_history)
             except LLMError as e:
                  self._save_message("system", f"Tool Runner LLM Error: {e.message}")
                  return {"status": "error", "error": str(e)}
@@ -175,7 +178,7 @@ class Orchestrator:
     def _continue_tool_loop(self, tool_history, continuous_intent=True):
          while True:
             try:
-                runner_resp = call_llm("tool_runner", tool_history)
+                runner_resp = self._call_llm("tool_runner", tool_history)
             except LLMError as e:
                  self._save_message("system", f"Tool Runner LLM Error: {e.message}")
                  return {"status": "error", "error": str(e)}
@@ -205,7 +208,7 @@ class Orchestrator:
         # The tool result was already saved to history
         
         try:
-            final_resp = call_llm("planner", messages)
+            final_resp = self._call_llm("planner", messages)
             self._save_message("planner", final_resp)
             
             summary = self._extract_tag(final_resp, "CONTEXT_SUMMARY")
@@ -259,6 +262,17 @@ class Orchestrator:
         if not tool_outputs:
             return
         self._save_message("tool_context", f"TOOL_CONTEXT:\n{tool_outputs}")
+
+    def _call_llm(self, role, messages):
+        stream = getattr(self, "stream_tokens", False)
+        callback = self._token_callback(role) if stream else None
+        return call_llm(role, messages, stream=stream, token_callback=callback)
+
+    def _token_callback(self, role):
+        def _inner(chunk):
+            if chunk:
+                push_token(self.thread_id, role, chunk)
+        return _inner
 
     def _format_command_output(self, cmd, exit_code, stdout, stderr, error_message=None, annotation=None):
         stdout_box = self._wrap_stream("STDOUT", stdout or "")
