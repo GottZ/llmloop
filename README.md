@@ -6,7 +6,8 @@ An experimental web UI (Flask) plus orchestration layer that lets you spin up �
 
 - **Two-stage agent loop** – Planner decides tool intents; Tool Runner executes commands, streams outputs back, and can chain work automatically when “Continuous Intent” is enabled (`src/orchestrator.py`). The container ships with git, ripgrep/rg, tree, fd, sed, curl, apply_patch, python, node, npm, etc., so the agent has a rich POSIX toolbox.
 - **Context compression** – Planner only sees a rolling context summary and the most recent messages; deeper history is fetched on-demand via `history summarize` / `history filter` commands.
-- **Live UI & HITL** – The thread view streams messages/approvals via Server-Sent Events (SSE) while you type, and still supports HITL approvals, retries, and forks (`src/app.py`, `src/templates/thread.html`).
+- **Live UI & HITL** – The thread view streams messages/approvals via SSE while you type, provides live token/context/queue stats, and still supports HITL approvals, retries, and forks (`src/app.py`, `src/templates/thread.html`).
+- **Queued prompts** – Additional user prompts submitted while a run is in progress are enqueued per thread and processed automatically once the agent returns to idle, so you can stack long-running plans.
 - **LLM backend management** – Admin screen for selecting/modifying backends and per-role model params (`src/templates/llm_admin.html`).
 - **Postgres persistence** – Threads, messages, tool runs, and backend configs are stored relationally (`src/db.py`).
 - **Optional token streaming** – Enable real-time token streaming per message to watch planner/tool-runner outputs appear before the final message is stored.
@@ -41,17 +42,18 @@ Environment variables (see `docker-compose.yml`):
 
 ## Usage Flow
 
-1. Visit `/` to create a thread. You can either point at an existing container path, upload a local folder (files stream up chunk-by-chunk with numerical and progress-bar indicators before extraction into `/tmp/thread_workspace_*`), or provide a Git URL that gets cloned into `/tmp/thread_git_*`.
-2. Open the thread to send messages. The UI streams new planner/tool outputs in real time via SSE, so you can keep the page open while the agent works.
-3. Use the toggles to adjust behavior:
+1. Visit `/` to create a thread. You can either point at an existing container path, upload a local folder (files stream up chunk-by-chunk with numerical + progress-bar indicators before extraction into `/tmp/thread_workspace_*`), or provide a Git URL that gets cloned into `/tmp/thread_git_*`.
+2. Open the thread to send messages. The UI streams new planner/tool outputs in real time via SSE, shows live status/tokens/queued prompts, and clears the input box as soon as a message is queued or sent.
+3. Use the toggles to adjust behavior (settings persist per thread):
    - `Enable Tools` – allow the Planner to dispatch intents.
    - `Continuous Intent` – automatically continue tool execution if the Planner responds with another `<TOOL_INTENT>`.
    - `Human-in-the-loop` – require approval before shell commands run.
-   - `Stream Tokens` – stream planner/tool-runner tokens live over SSE for incremental feedback (falls back to batched messages when unchecked).
+   - `Stream Tokens` – enabled by default; stream planner/tool-runner tokens live over SSE for incremental feedback (falls back to batched messages when unchecked).
 4. When the Planner asks for tools, the Tool Runner executes `RUN:` commands and returns `TOOL_RESULT` or `TOOL_CONTEXT` entries. Approvals can be granted/denied via the UI banner, which updates live from the SSE feed.
-5. Use `Retry Last Operation` to re-drive the last Planner intent or re-run the planner loop if needed.
-6. Fork threads to branch from any point without losing history.
-7. Use the “Download” button inside a thread to retrieve a ZIP snapshot of the current working directory/context.
+5. Submit additional prompts while the agent works to queue them; queued prompt count is shown next to the status indicator and each prompt runs automatically once the thread returns to idle.
+6. Use `Retry Last Operation` to re-drive the last Planner intent or re-run the planner loop if needed.
+7. Fork threads to branch from any point without losing history.
+8. Use the “Download” button inside a thread to retrieve a ZIP snapshot of the current working directory/context.
 
 ## Planner / Tool Runner Protocol
 
