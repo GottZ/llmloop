@@ -70,7 +70,7 @@
 {% if backend %}
 <div class="card">
     <form id="message-form" action="/thread/{{ thread.id }}/send" method="post">
-        <textarea name="content" rows="4" placeholder="Type your message..." required></textarea>
+        <textarea id="thread-input" name="content" rows="4" placeholder="Type your message..." required></textarea>
         <div style="display:flex; gap: 1rem; align-items:center; flex-wrap:wrap;">
             <input type="hidden" name="use_tools_present" value="1">
             <label style="width:auto;">
@@ -320,8 +320,8 @@
     }
     const statusBox = document.getElementById('form-status');
     const submitBtn = form.querySelector('button[type="submit"]');
-    const textInput = form.querySelector('textarea[name="content"]');
-    form.addEventListener('submit', function(evt) {
+    const textInput = document.getElementById('thread-input');
+    function submitForm(evt) {
         evt.preventDefault();
         if (form.dataset.sending === '1') {
             return;
@@ -360,7 +360,17 @@
                 submitBtn.disabled = false;
             }
         });
-    });
+    }
+
+    form.addEventListener('submit', submitForm);
+
+    if (textInput) {
+        textInput.addEventListener('keydown', function(evt) {
+            if ((evt.ctrlKey || evt.metaKey) && evt.key === 'Enter') {
+                submitForm(evt);
+            }
+        });
+    }
 
     function showStatus(message, level) {
         if (!statusBox) {
