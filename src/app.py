@@ -1,7 +1,9 @@
 import sys
 import os
 import json
-from flask import Flask, render_template, request, redirect, url_for, flash, session
+import time
+import uuid
+from flask import Flask, render_template, request, redirect, url_for, flash, session, Response, stream_with_context, jsonify
 from config import Config
 from db import init_db, wait_for_db, get_db_connection, get_active_backend
 from orchestrator import Orchestrator
@@ -42,7 +44,8 @@ def new_thread():
 @app.route('/thread/<int:thread_id>')
 def view_thread(thread_id):
     conn = get_db_connection()
-    cur = conn.cursor(cursor_factory=import_extras().RealDictCursor)
+    extras = import_extras()
+    cur = conn.cursor(cursor_factory=extras.RealDictCursor)
     
     # Get Thread
     cur.execute("SELECT * FROM threads WHERE id = %s", (thread_id,))
@@ -64,23 +67,84 @@ def view_thread(thread_id):
                            backend=backend,
                            pending_approval=pending_approval)
 
+@app.route('/thread/<int:thread_id>/events')
+def thread_events(thread_id):
+    after = request.args.get('after', default=0, type=int)
+    
+    def event_stream():
+        conn = get_db_connection()
+        extras = import_extras()
+        last_id = after
+        last_pending_token = None
+        last_heartbeat = time.time()
+        try:
+            while True:
+                with conn.cursor(cursor_factory=extras.RealDictCursor) as cur:
+                    cur.execute(
+                        "SELECT id, role, content, created_at FROM messages WHERE thread_id = %s AND id > %s ORDER BY id ASC",
+                        (thread_id, last_id)
+                    )
+                    rows = cur.fetchall()
+                if rows:
+                    last_id = rows[-1]['id']
+                    for row in rows:
+                        payload = {
+                            "type": "message",
+                            "id": row['id'],
+                            "role": row['role'],
+                            "content": row['content'],
+                            "created_at": row['created_at'].isoformat() if row['created_at'] else ""
+                        }
+                        yield f"data: {json.dumps(payload)}\n\n"
+                pending = PENDING_APPROVALS.get(thread_id)
+                pending_token = pending.get('token') if pending else None
+                if pending_token != last_pending_token:
+                    last_pending_token = pending_token
+                    payload = {
+                        "type": "pending",
+                        "pending": bool(pending),
+                        "commands": pending['commands'] if pending else []
+                    }
+                    yield f"data: {json.dumps(payload)}\n\n"
+                now = time.time()
+                if now - last_heartbeat >= 15:
+                    yield ": keep-alive\n\n"
+                    last_heartbeat = now
+                time.sleep(1)
+        finally:
+            conn.close()
+    
+    return Response(stream_with_context(event_stream()), mimetype='text/event-stream')
+
 @app.route('/thread/<int:thread_id>/send', methods=['POST'])
 def send_message(thread_id):
     user_input = request.form.get('content')
     use_tools = 'use_tools' in request.form
     hitl = 'hitl' in request.form
     continuous_intent = 'continuous_intent' in request.form
+    wants_json = request.accept_mimetypes.best_match(['application/json', 'text/html']) == 'application/json'
     
     orch = Orchestrator(thread_id)
     result = orch.process_user_message(user_input, use_tools, hitl, continuous_intent)
     
+    response_body = {"status": result.get('status')}
+    
     if result['status'] == 'approval_required':
         pending = dict(result)
         pending['continuous_intent'] = continuous_intent
+        pending['token'] = uuid.uuid4().hex
         PENDING_APPROVALS[thread_id] = pending
-        flash("Approval required for tool execution.", "warning")
+        if not wants_json:
+            flash("Approval required for tool execution.", "warning")
     elif result['status'] == 'error':
-        flash(f"Error: {result.get('error')}", "danger")
+        response_body['error'] = result.get('error')
+        if not wants_json:
+            flash(f"Error: {result.get('error')}", "danger")
+    else:
+        response_body['status'] = 'complete'
+    
+    if wants_json:
+        return jsonify(response_body)
         
     return redirect(url_for('view_thread', thread_id=thread_id))
 

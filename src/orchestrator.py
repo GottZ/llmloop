@@ -3,6 +3,7 @@ import subprocess
 import shlex
 import os
 import logging
+import uuid
 from db import get_db_connection
 from llm_client import call_llm, LLMError
 from prompts import PLANNER_SYSTEM_PROMPT, TOOL_RUNNER_SYSTEM_PROMPT
@@ -58,7 +59,7 @@ class Orchestrator:
                 mapped_role = 'user'
             elif role == 'planner':
                 mapped_role = 'assistant'
-            elif role == 'tool_runner':
+            elif role in ('tool_runner', 'tool_context'):
                 mapped_role = 'system'
             else:
                 mapped_role = 'system'
@@ -122,7 +123,7 @@ class Orchestrator:
             # Check for RESULT
             if "RESULT:" in runner_resp:
                 result_text = runner_resp.split("RESULT:", 1)[1].strip()
-                self._save_message("tool_runner", f"Tool Result: {result_text}")
+                self._save_message("tool_runner", f"TOOL_RESULT:\n{result_text}")
                 # Final Planner pass to synthesize
                 return self.run_final_planner_pass(hitl, continuous_intent)
 
@@ -181,7 +182,7 @@ class Orchestrator:
             
             if "RESULT:" in runner_resp:
                 result_text = runner_resp.split("RESULT:", 1)[1].strip()
-                self._save_message("tool_runner", f"Tool Result: {result_text}")
+                self._save_message("tool_runner", f"TOOL_RESULT:\n{result_text}")
                 return self.run_final_planner_pass(hitl=False, continuous_intent=continuous_intent)
 
             commands = [line.replace("RUN:", "").strip() for line in runner_resp.splitlines() if line.strip().startswith("RUN:")]
@@ -229,7 +230,9 @@ class Orchestrator:
             stripped = cmd.strip()
             if stripped.lower().startswith("history "):
                 output = self._handle_history_command(stripped)
-                output_buffer.append(f"CMD: {cmd}\nEXIT: 0\nSTDOUT:\n{output}\nSTDERR:\n\n")
+                stdout = output or ""
+                stderr = ""
+                output_buffer.append(self._format_command_output(cmd, 0, stdout, stderr))
                 continue
             try:
                 # Run command
@@ -238,10 +241,10 @@ class Orchestrator:
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30
                 )
                 self._save_tool_run(cmd, proc.stdout, proc.stderr, proc.returncode)
-                output_buffer.append(f"CMD: {cmd}\nEXIT: {proc.returncode}\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}\n")
+                output_buffer.append(self._format_command_output(cmd, proc.returncode, proc.stdout, proc.stderr))
             except Exception as e:
                 self._save_tool_run(cmd, "", str(e), -1)
-                output_buffer.append(f"CMD: {cmd}\nERROR: {str(e)}\n")
+                output_buffer.append(self._format_command_output(cmd, -1, "", str(e), error_message=str(e)))
         return "\n".join(output_buffer)
 
     def _extract_tag(self, text, tag):
@@ -252,7 +255,29 @@ class Orchestrator:
     def _record_tool_outputs(self, tool_outputs):
         if not tool_outputs:
             return
-        self._save_message("tool_runner", f"Tool Outputs:\n{tool_outputs}")
+        self._save_message("tool_context", f"TOOL_CONTEXT:\n{tool_outputs}")
+
+    def _format_command_output(self, cmd, exit_code, stdout, stderr, error_message=None):
+        stdout_box = self._wrap_stream("STDOUT", stdout or "")
+        stderr_box = self._wrap_stream("STDERR", stderr or "")
+        parts = [
+            f"CMD: {cmd}",
+            f"EXIT: {exit_code}",
+            "STDOUT:",
+            stdout_box,
+            "STDERR:",
+            stderr_box,
+        ]
+        if error_message:
+            parts.append(f"ERROR: {error_message}")
+        return "\n".join(parts)
+
+    def _wrap_stream(self, label, content):
+        token = uuid.uuid4().hex
+        boundary = f"@@{label}_{token}@@"
+        if not content.endswith("\n"):
+            content = content + "\n" if content else ""
+        return f"{boundary}\n{content}{boundary}"
 
     def _handle_history_command(self, command):
         tokens = shlex.split(command)
