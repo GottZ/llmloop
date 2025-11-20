@@ -39,6 +39,9 @@
 
         <input type="hidden" name="workspace_id" id="workspace-id">
         <div id="upload-progress" class="alert" style="display:none;"></div>
+        <div id="upload-progress-bar" style="display:none; background: var(--border); border-radius:4px; overflow:hidden; margin-bottom:0.5rem;">
+            <div id="upload-progress-fill" style="width:0%; height:8px; background: var(--primary); transition: width 0.2s;"></div>
+        </div>
         <button type="submit" class="btn">Create Thread</button>
     </form>
 </div>
@@ -56,6 +59,8 @@
     const uploadField = document.getElementById('upload-input-field');
     const progressBox = document.getElementById('upload-progress');
     const workspaceInput = document.getElementById('workspace-id');
+    const progressBar = document.getElementById('upload-progress-bar');
+    const progressFill = document.getElementById('upload-progress-fill');
 
     select.addEventListener('change', function() {
         const value = select.value;
@@ -101,6 +106,9 @@
         progressBox.style.display = message ? '' : 'none';
         progressBox.className = 'alert' + (isError ? ' alert-danger' : '');
         progressBox.textContent = message || '';
+        if (!message && progressBar) {
+            progressBar.style.display = 'none';
+        }
     }
 
     async function chunkedUpload(fileList) {
@@ -113,7 +121,11 @@
         const files = Array.from(fileList);
         for (let i = 0; i < files.length; i++) {
             const file = files[i];
-            showProgress(`Uploading ${file.webkitRelativePath || file.name} (${i + 1}/${files.length})…`, false);
+            showProgress(`${i + 1}/${files.length} Uploading ${file.webkitRelativePath || file.name}`, false);
+            if (progressBar && progressFill) {
+                progressBar.style.display = '';
+                progressFill.style.width = `${Math.round(((i) / files.length) * 100)}%`;
+            }
             const formData = new FormData();
             formData.append('workspace_id', workspaceId);
             formData.append('path', file.webkitRelativePath || file.name);
@@ -131,6 +143,9 @@
                 const errorText = await resp.text();
                 throw new Error(errorText || 'Upload failed.');
             }
+        }
+        if (progressBar && progressFill) {
+            progressFill.style.width = '100%';
         }
         showProgress('All files uploaded.', false);
         return workspaceId;
