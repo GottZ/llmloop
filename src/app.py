@@ -26,6 +26,8 @@ app.config.from_object(Config)
 PENDING_APPROVALS = {}
 # Track thread-level activity for SSE status updates
 THREAD_STATUSES = {}
+# Track prepared upload workspaces before thread creation
+UPLOAD_WORKSPACES = {}
 
 
 def set_thread_status(thread_id, state):
@@ -140,6 +142,11 @@ def new_thread():
         if source_type == 'upload':
             files = request.files.getlist('upload[]')
             cwd = _prepare_upload_workspace(files)
+        elif source_type == 'upload_prepared':
+            workspace_id = request.form.get('workspace_id')
+            cwd = UPLOAD_WORKSPACES.pop(workspace_id, None)
+            if not cwd or not os.path.isdir(cwd):
+                raise ValueError("Uploaded workspace expired or missing. Please upload again.")
         elif source_type == 'git':
             git_url = request.form.get('git_url', '').strip()
             cwd = _prepare_git_workspace(git_url)
@@ -155,6 +162,37 @@ def new_thread():
     conn.close()
     set_thread_status(thread_id, "idle")
     return redirect(url_for('view_thread', thread_id=thread_id))
+
+
+@app.route('/thread/upload/init', methods=['POST'])
+def init_upload_workspace():
+    workspace = tempfile.mkdtemp(prefix="thread_upload_stream_", dir="/tmp")
+    workspace_id = uuid.uuid4().hex
+    UPLOAD_WORKSPACES[workspace_id] = workspace
+    return jsonify({"workspace_id": workspace_id})
+
+
+@app.route('/thread/upload/file', methods=['POST'])
+def upload_workspace_file():
+    workspace_id = request.form.get('workspace_id')
+    rel_path = _safe_relative_filename(request.form.get('path'))
+    file_obj = request.files.get('file')
+    workspace = UPLOAD_WORKSPACES.get(workspace_id)
+    if not workspace or not rel_path or not file_obj:
+        return jsonify({"error": "Invalid upload parameters."}), 400
+    dest_path = os.path.join(workspace, rel_path)
+    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+    file_obj.save(dest_path)
+    return jsonify({"status": "ok"})
+
+
+@app.route('/thread/upload/cancel', methods=['POST'])
+def cancel_upload_workspace():
+    workspace_id = request.form.get('workspace_id')
+    workspace = UPLOAD_WORKSPACES.pop(workspace_id, None)
+    if workspace:
+        shutil.rmtree(workspace, ignore_errors=True)
+    return jsonify({"status": "cancelled"})
 
 @app.route('/thread/<int:thread_id>')
 def view_thread(thread_id):
