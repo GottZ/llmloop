@@ -69,11 +69,27 @@
 <div class="card">
     <form id="message-form" action="/thread/{{ thread.id }}/send" method="post">
         <textarea name="content" rows="4" placeholder="Type your message..." required></textarea>
-        <div style="display:flex; gap: 1rem; align-items:center;">
-            <label style="width:auto;"><input type="checkbox" name="use_tools" checked style="width:auto;"> Enable Tools</label>
-            <label style="width:auto;"><input type="checkbox" name="continuous_intent" checked style="width:auto;"> Continuous Intent</label>
-            <label style="width:auto;"><input type="checkbox" name="hitl" style="width:auto;"> Human-in-the-loop</label>
-            <label style="width:auto;"><input type="checkbox" name="stream_tokens" style="width:auto;"> Stream Tokens</label>
+        <div style="display:flex; gap: 1rem; align-items:center; flex-wrap:wrap;">
+            <input type="hidden" name="use_tools_present" value="1">
+            <label style="width:auto;">
+                <input type="checkbox" name="use_tools" value="1" style="width:auto;" {% if prefs.use_tools %}checked{% endif %}>
+                Enable Tools
+            </label>
+            <input type="hidden" name="continuous_intent_present" value="1">
+            <label style="width:auto;">
+                <input type="checkbox" name="continuous_intent" value="1" style="width:auto;" {% if prefs.continuous_intent %}checked{% endif %}>
+                Continuous Intent
+            </label>
+            <input type="hidden" name="hitl_present" value="1">
+            <label style="width:auto;">
+                <input type="checkbox" name="hitl" value="1" style="width:auto;" {% if prefs.hitl %}checked{% endif %}>
+                Human-in-the-loop
+            </label>
+            <input type="hidden" name="stream_tokens_present" value="1">
+            <label style="width:auto;">
+                <input type="checkbox" name="stream_tokens" value="1" style="width:auto;" {% if prefs.stream_tokens %}checked{% endif %}>
+                Stream Tokens
+            </label>
             <button type="submit" class="btn" style="margin-left:auto;">Send</button>
         </div>
     </form>
@@ -291,6 +307,7 @@
     }
     const statusBox = document.getElementById('form-status');
     const submitBtn = form.querySelector('button[type="submit"]');
+    const textInput = form.querySelector('textarea[name="content"]');
     form.addEventListener('submit', function(evt) {
         evt.preventDefault();
         if (form.dataset.sending === '1') {
@@ -301,6 +318,9 @@
             submitBtn.disabled = true;
         }
         const formData = new FormData(form);
+        if (textInput) {
+            textInput.value = '';
+        }
         fetch(form.action, {
             method: 'POST',
             body: formData,
@@ -317,7 +337,6 @@
             } else {
                 showStatus('', '');
             }
-            form.reset();
         }).catch(function() {
             showStatus('Failed to send message.', 'danger');
         }).finally(function() {

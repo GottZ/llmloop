@@ -57,6 +57,24 @@ def estimate_tokens(text):
     return max(1, len(parts))
 
 
+def get_thread_preferences(thread_id):
+    defaults = {
+        "use_tools": True,
+        "hitl": False,
+        "continuous_intent": True,
+        "stream_tokens": True,
+    }
+    prefs = session.get("thread_preferences") or {}
+    thread_prefs = prefs.get(str(thread_id), {})
+    return {**defaults, **thread_prefs}
+
+
+def set_thread_preferences(thread_id, values):
+    prefs = session.get("thread_preferences") or {}
+    prefs[str(thread_id)] = values
+    session["thread_preferences"] = prefs
+
+
 def _prepare_local_cwd(path):
     return path if path else "/tmp"
 
@@ -250,13 +268,15 @@ def view_thread(thread_id):
         "context_queue": context_queue,
         "summary_tokens": context_summary_tokens
     }
+    prefs = get_thread_preferences(thread_id)
     
     return render_template('thread.html', 
                            thread=thread, 
                            messages=messages, 
                            backend=backend,
                            pending_approval=pending_approval,
-                           stats=stats)
+                           stats=stats,
+                           prefs=prefs)
 
 @app.route('/thread/<int:thread_id>/events')
 def thread_events(thread_id):
@@ -320,10 +340,21 @@ def thread_events(thread_id):
 @app.route('/thread/<int:thread_id>/send', methods=['POST'])
 def send_message(thread_id):
     user_input = request.form.get('content')
-    use_tools = 'use_tools' in request.form
-    hitl = 'hitl' in request.form
-    continuous_intent = 'continuous_intent' in request.form
-    stream_tokens = 'stream_tokens' in request.form
+    prefs = get_thread_preferences(thread_id)
+
+    def parse_checkbox(name, default):
+        present = request.form.get(f"{name}_present")
+        if present is not None:
+            return name in request.form
+        value = request.form.get(name)
+        if value is None:
+            return default
+        return value == '1'
+
+    use_tools = parse_checkbox('use_tools', prefs['use_tools'])
+    hitl = parse_checkbox('hitl', prefs['hitl'])
+    continuous_intent = parse_checkbox('continuous_intent', prefs['continuous_intent'])
+    stream_tokens = parse_checkbox('stream_tokens', prefs['stream_tokens'])
     wants_json = request.accept_mimetypes.best_match(['application/json', 'text/html']) == 'application/json'
     
     orch = Orchestrator(thread_id)
@@ -336,6 +367,12 @@ def send_message(thread_id):
         raise
     
     response_body = {"status": result.get('status')}
+    set_thread_preferences(thread_id, {
+        "use_tools": use_tools,
+        "hitl": hitl,
+        "continuous_intent": continuous_intent,
+        "stream_tokens": stream_tokens,
+    })
     
     if result['status'] == 'approval_required':
         pending = dict(result)
@@ -417,8 +454,9 @@ def retry_last(thread_id):
     if not last_msg:
          return redirect(url_for('view_thread', thread_id=thread_id))
 
+    prefs = get_thread_preferences(thread_id)
     orch = Orchestrator(thread_id)
-    orch.stream_tokens = False
+    orch.stream_tokens = prefs['stream_tokens']
     set_thread_status(thread_id, "running")
 
     # If the last response was from the planner, reuse its TOOL_INTENT so the
