@@ -2,8 +2,20 @@ FROM python:3.14-slim
 
 WORKDIR /app
 
-# Install system deps for psycopg2
-RUN apt-get update && apt-get install -y libpq-dev gcc curl && rm -rf /var/lib/apt/lists/*
+# Install system deps for psycopg2 + common CLI tools
+RUN apt-get update && apt-get install -y \
+    libpq-dev \
+    gcc \
+    curl \
+    git \
+    ripgrep \
+    tree \
+    fd-find \
+    nodejs \
+    npm \
+    sed \
+    && ln -sf /usr/bin/fdfind /usr/local/bin/fd \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY src/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

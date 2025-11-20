@@ -4,7 +4,7 @@ An experimental web UI (Flask) plus orchestration layer that lets you spin up �
 
 ## Highlights
 
-- **Two-stage agent loop** – Planner decides tool intents; Tool Runner executes commands, streams outputs back, and can chain work automatically when “Continuous Intent” is enabled (`src/orchestrator.py`).
+- **Two-stage agent loop** – Planner decides tool intents; Tool Runner executes commands, streams outputs back, and can chain work automatically when “Continuous Intent” is enabled (`src/orchestrator.py`). The container ships with git, ripgrep/rg, tree, fd, sed, curl, apply_patch, python, node, npm, etc., so the agent has a rich POSIX toolbox.
 - **Context compression** – Planner only sees a rolling context summary and the most recent messages; deeper history is fetched on-demand via `history summarize` / `history filter` commands.
 - **Live UI & HITL** – The thread view streams messages/approvals via Server-Sent Events (SSE) while you type, and still supports HITL approvals, retries, and forks (`src/app.py`, `src/templates/thread.html`).
 - **LLM backend management** – Admin screen for selecting/modifying backends and per-role model params (`src/templates/llm_admin.html`).
@@ -58,6 +58,7 @@ Environment variables (see `docker-compose.yml`):
   - `history summarize chunk=10 role=user` – chunked summaries of past messages.
   - `history filter role=tool_context limit=5 contains=error` – targeted history slices.
   These are intercepted server-side; no actual shell command is run.
+- Available CLI tools inside the container include git, curl, rg (ripgrep), tree, fd, sed, python, node, npm, gcc, apply_patch, and more—prefer these over fabricating code.
 - Every shell command’s STDOUT/STDERR is wrapped in randomized boundary lines (e.g., `@@STDOUT_<token>@@ … @@STDOUT_<token>@@`) so tool output can contain arbitrary text—including the strings `RUN:` or `RESULT:`—without breaking the protocol. Both prompts explain how to strip/ignore the markers.
 
 ## Administering LLM Backends
