@@ -8,7 +8,7 @@ import zipfile
 import shutil
 import subprocess
 from pathlib import Path
-from flask import Flask, render_template, request, redirect, url_for, flash, session, Response, stream_with_context, jsonify
+from flask import Flask, render_template, request, redirect, url_for, flash, session, Response, stream_with_context, jsonify, send_file, after_this_request
 from config import Config
 from db import init_db, wait_for_db, get_db_connection, get_active_backend
 from orchestrator import Orchestrator, PLANNER_HISTORY_LIMIT
@@ -473,6 +473,37 @@ def delete_thread(thread_id):
         shutil.rmtree(workspace, ignore_errors=True)
     flash(f"Thread #{thread_id} deleted.", "info")
     return redirect(url_for('index'))
+
+
+@app.route('/thread/<int:thread_id>/download')
+def download_thread(thread_id):
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=import_extras().RealDictCursor)
+    cur.execute("SELECT cwd FROM threads WHERE id = %s", (thread_id,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    if not row:
+        flash("Thread not found.", "danger")
+        return redirect(url_for('index'))
+    cwd = row['cwd']
+    if not cwd or not os.path.isdir(cwd):
+        flash("Working directory is unavailable.", "danger")
+        return redirect(url_for('view_thread', thread_id=thread_id))
+    export_dir = tempfile.mkdtemp(prefix="thread_export_", dir="/tmp")
+    zip_base = os.path.join(export_dir, f"thread_{thread_id}")
+    archive_path = shutil.make_archive(zip_base, "zip", root_dir=cwd)
+
+    @after_this_request
+    def cleanup(response):
+        shutil.rmtree(export_dir, ignore_errors=True)
+        return response
+
+    return send_file(
+        archive_path,
+        as_attachment=True,
+        download_name=f"thread_{thread_id}.zip",
+    )
 
 # --- Admin Routes ---
 

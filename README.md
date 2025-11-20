@@ -51,6 +51,7 @@ Environment variables (see `docker-compose.yml`):
 4. When the Planner asks for tools, the Tool Runner executes `RUN:` commands and returns `TOOL_RESULT` or `TOOL_CONTEXT` entries. Approvals can be granted/denied via the UI banner, which updates live from the SSE feed.
 5. Use `Retry Last Operation` to re-drive the last Planner intent or re-run the planner loop if needed.
 6. Fork threads to branch from any point without losing history.
+7. Use the “Download” button inside a thread to retrieve a ZIP snapshot of the current working directory/context.
 
 ## Planner / Tool Runner Protocol
 
