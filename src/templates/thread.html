@@ -51,12 +51,14 @@
     data-context-tokens="{{ stats.context_tokens }}"
     data-context-limit="{{ stats.context_limit }}"
     data-summary-tokens="{{ stats.summary_tokens }}"
-    data-context-list='{{ stats.context_queue|tojson }}'>
+    data-context-list='{{ stats.context_queue|tojson }}'
+    data-queue-length="{{ queue_length }}">
     <div id="status-indicator" class="status-pill status-idle">Idle</div>
     <div class="status-metrics">
         <div>Total tokens: <span id="total-token-count">{{ stats.total_tokens }}</span></div>
         <div>Context tokens: <span id="context-token-count">{{ stats.context_tokens }}</span></div>
         <div>Context window: <span id="context-window-size">{{ stats.context_limit }}</span></div>
+        <div>Queued prompts: <span id="queue-length">{{ queue_length }}</span></div>
     </div>
 </div>
 
@@ -111,6 +113,7 @@
     const totalTokenDisplay = document.getElementById('total-token-count');
     const contextTokenDisplay = document.getElementById('context-token-count');
     const contextWindowDisplay = document.getElementById('context-window-size');
+    const queueDisplay = document.getElementById('queue-length');
     const streamBox = document.getElementById('streaming-output');
     const streamRoleEl = document.getElementById('stream-role');
     const streamContentEl = document.getElementById('stream-content');
@@ -119,6 +122,7 @@
     const contextLimit = Number(messagesEl?.dataset.contextLimit || 0);
     let summaryTokens = Number(messagesEl?.dataset.summaryTokens || 0);
     let contextQueue = [];
+    let queueLength = Number(statusFrame?.dataset.queueLength || 0);
     try {
         contextQueue = JSON.parse(messagesEl?.dataset.contextList || '[]');
     } catch (err) {
@@ -143,6 +147,8 @@
                 updatePending(payload);
             } else if (payload.type === 'status') {
                 updateStatus(payload.state);
+            } else if (payload.type === 'queue') {
+                updateQueue(payload.length);
             } else if (payload.type === 'token') {
                 appendToken(payload);
             }
@@ -198,6 +204,13 @@
         statusEl.className = `status-pill status-${state}`;
         if (state === 'idle') {
             resetStreamBox();
+        }
+    }
+
+    function updateQueue(length) {
+        queueLength = Number(length) || 0;
+        if (queueDisplay) {
+            queueDisplay.textContent = queueLength.toString();
         }
     }
 
@@ -334,6 +347,8 @@
                 showStatus(data.error || 'An error occurred.', 'danger');
             } else if (data.status === 'approval_required') {
                 showStatus('Approval required for pending commands.', 'warning');
+            } else if (data.status === 'queued') {
+                showStatus(`Queued. Position: ${data.queue_length || 1}.`, 'info');
             } else {
                 showStatus('', '');
             }

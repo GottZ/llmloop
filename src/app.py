@@ -8,6 +8,7 @@ import zipfile
 import shutil
 import subprocess
 from pathlib import Path
+from collections import deque
 from flask import Flask, render_template, request, redirect, url_for, flash, session, Response, stream_with_context, jsonify, send_file, after_this_request
 from config import Config
 from db import init_db, wait_for_db, get_db_connection, get_active_backend
@@ -28,10 +29,15 @@ PENDING_APPROVALS = {}
 THREAD_STATUSES = {}
 # Track prepared upload workspaces before thread creation
 UPLOAD_WORKSPACES = {}
+# Queue pending user messages when thread is busy
+THREAD_QUEUES = {}
+QUEUE_PROCESSING = set()
 
 
 def set_thread_status(thread_id, state):
     THREAD_STATUSES[thread_id] = {"state": state, "token": uuid.uuid4().hex}
+    if state == "idle":
+        process_thread_queue(thread_id)
 
 
 def get_thread_status(thread_id):
@@ -73,6 +79,85 @@ def set_thread_preferences(thread_id, values):
     prefs = session.get("thread_preferences") or {}
     prefs[str(thread_id)] = values
     session["thread_preferences"] = prefs
+
+
+def enqueue_thread_message(thread_id, entry):
+    queue = THREAD_QUEUES.setdefault(thread_id, deque())
+    queue.append(entry)
+    return len(queue)
+
+
+def pop_thread_message(thread_id):
+    queue = THREAD_QUEUES.get(thread_id)
+    if not queue:
+        return None
+    entry = queue.popleft()
+    if not queue:
+        THREAD_QUEUES.pop(thread_id, None)
+    return entry
+
+
+def get_queue_length(thread_id):
+    queue = THREAD_QUEUES.get(thread_id)
+    return len(queue) if queue else 0
+
+
+def run_user_message(thread_id, user_text, prefs):
+    orch = Orchestrator(thread_id)
+    orch.stream_tokens = prefs['stream_tokens']
+    set_thread_status(thread_id, "running")
+    try:
+        return orch.process_user_message(
+            user_text,
+            prefs['use_tools'],
+            prefs['hitl'],
+            prefs['continuous_intent'],
+            prefs['stream_tokens']
+        )
+    except Exception:
+        set_thread_status(thread_id, "idle")
+        raise
+
+
+def handle_message_result(thread_id, result, prefs):
+    if result['status'] == 'approval_required':
+        pending = dict(result)
+        pending['continuous_intent'] = prefs['continuous_intent']
+        pending['token'] = uuid.uuid4().hex
+        pending['stream_tokens'] = prefs['stream_tokens']
+        PENDING_APPROVALS[thread_id] = pending
+        set_thread_status(thread_id, "waiting_approval")
+    elif result['status'] == 'error':
+        set_thread_status(thread_id, "idle")
+    else:
+        set_thread_status(thread_id, "idle")
+    return result
+
+
+def process_thread_queue(thread_id):
+    if get_queue_length(thread_id) == 0:
+        return
+    if thread_id in QUEUE_PROCESSING:
+        return
+    status = get_thread_status(thread_id)
+    if status['state'] != 'idle':
+        return
+    QUEUE_PROCESSING.add(thread_id)
+    try:
+        while True:
+            entry = pop_thread_message(thread_id)
+            if not entry:
+                break
+            result = run_user_message(thread_id, entry['content'], entry['prefs'])
+            handle_message_result(thread_id, result, entry['prefs'])
+            if result['status'] in ('error', 'approval_required'):
+                break
+            if get_queue_length(thread_id) == 0:
+                break
+            if get_thread_status(thread_id)['state'] != 'idle':
+                break
+    finally:
+        QUEUE_PROCESSING.discard(thread_id)
 
 
 def _prepare_local_cwd(path):
@@ -261,12 +346,14 @@ def view_thread(thread_id):
     context_queue = [estimate_tokens(msg['content']) for msg in context_subset]
     context_summary_tokens = estimate_tokens(thread['context_summary']) if thread and thread.get('context_summary') else 0
     context_tokens = context_summary_tokens + sum(context_queue)
+    queue_length = get_queue_length(thread_id)
     stats = {
         "total_tokens": total_tokens,
         "context_tokens": context_tokens,
         "context_limit": context_limit,
         "context_queue": context_queue,
-        "summary_tokens": context_summary_tokens
+        "summary_tokens": context_summary_tokens,
+        "queue_length": queue_length
     }
     prefs = get_thread_preferences(thread_id)
     
@@ -276,7 +363,8 @@ def view_thread(thread_id):
                            backend=backend,
                            pending_approval=pending_approval,
                            stats=stats,
-                           prefs=prefs)
+                           prefs=prefs,
+                           queue_length=queue_length)
 
 @app.route('/thread/<int:thread_id>/events')
 def thread_events(thread_id):
@@ -289,8 +377,10 @@ def thread_events(thread_id):
         last_pending_token = None
         status_info = get_thread_status(thread_id)
         last_status_token = status_info['token']
+        last_queue_len = get_queue_length(thread_id)
         last_heartbeat = time.time()
         yield f"data: {json.dumps({'type': 'status', 'state': status_info['state']})}\n\n"
+        yield f"data: {json.dumps({'type': 'queue', 'length': last_queue_len})}\n\n"
         try:
             while True:
                 with conn.cursor(cursor_factory=extras.RealDictCursor) as cur:
@@ -327,6 +417,10 @@ def thread_events(thread_id):
                 if status_state['token'] != last_status_token:
                     last_status_token = status_state['token']
                     yield f"data: {json.dumps({'type': 'status', 'state': status_state['state']})}\n\n"
+                queue_len = get_queue_length(thread_id)
+                if queue_len != last_queue_len:
+                    last_queue_len = queue_len
+                    yield f"data: {json.dumps({'type': 'queue', 'length': queue_len})}\n\n"
                 now = time.time()
                 if now - last_heartbeat >= 15:
                     yield ": keep-alive\n\n"
@@ -357,40 +451,39 @@ def send_message(thread_id):
     stream_tokens = parse_checkbox('stream_tokens', prefs['stream_tokens'])
     wants_json = request.accept_mimetypes.best_match(['application/json', 'text/html']) == 'application/json'
     
-    orch = Orchestrator(thread_id)
-    orch.stream_tokens = stream_tokens
-    set_thread_status(thread_id, "running")
-    try:
-        result = orch.process_user_message(user_input, use_tools, hitl, continuous_intent, stream_tokens)
-    except Exception:
-        set_thread_status(thread_id, "idle")
-        raise
-    
+    entry = {
+        "content": user_input,
+        "prefs": {
+            "use_tools": use_tools,
+            "hitl": hitl,
+            "continuous_intent": continuous_intent,
+            "stream_tokens": stream_tokens,
+        }
+    }
+    set_thread_preferences(thread_id, entry['prefs'])
+
+    status = get_thread_status(thread_id)
+    if status['state'] != 'idle':
+        queue_len = enqueue_thread_message(thread_id, entry)
+        response_body = {"status": "queued", "queue_length": queue_len}
+        if wants_json:
+            return jsonify(response_body)
+        flash(f"Thread busy. Queued message #{queue_len}.", "info")
+        return redirect(url_for('view_thread', thread_id=thread_id))
+
+    result = run_user_message(thread_id, entry['content'], entry['prefs'])
+    handle_message_result(thread_id, result, entry['prefs'])
     response_body = {"status": result.get('status')}
-    set_thread_preferences(thread_id, {
-        "use_tools": use_tools,
-        "hitl": hitl,
-        "continuous_intent": continuous_intent,
-        "stream_tokens": stream_tokens,
-    })
-    
+
     if result['status'] == 'approval_required':
-        pending = dict(result)
-        pending['continuous_intent'] = continuous_intent
-        pending['token'] = uuid.uuid4().hex
-        pending['stream_tokens'] = stream_tokens
-        PENDING_APPROVALS[thread_id] = pending
-        set_thread_status(thread_id, "waiting_approval")
         if not wants_json:
             flash("Approval required for tool execution.", "warning")
     elif result['status'] == 'error':
         response_body['error'] = result.get('error')
-        set_thread_status(thread_id, "idle")
         if not wants_json:
             flash(f"Error: {result.get('error')}", "danger")
     else:
         response_body['status'] = 'complete'
-        set_thread_status(thread_id, "idle")
     
     if wants_json:
         return jsonify(response_body)
@@ -527,6 +620,8 @@ def delete_thread(thread_id):
     PENDING_APPROVALS.pop(thread_id, None)
     clear_tokens(thread_id)
     clear_thread_status(thread_id)
+    THREAD_QUEUES.pop(thread_id, None)
+    QUEUE_PROCESSING.discard(thread_id)
     if workspace and workspace.startswith("/tmp/thread_"):
         shutil.rmtree(workspace, ignore_errors=True)
     flash(f"Thread #{thread_id} deleted.", "info")
