@@ -26,6 +26,8 @@ An experimental web UI (Flask) plus orchestration layer that lets you spin up â€
 ```bash
 # Start Postgres + Flask app
 docker compose up --build
+# The built-in Flask server runs with threading enabled so SSE endpoints
+# donâ€™t block other requests. For production, use a threaded/asynchronous WSGI server.
 
 # App runs on http://localhost:5000
 ```

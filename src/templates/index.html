@@ -22,9 +22,14 @@
 <div>
     {% for thread in threads %}
     <div class="card">
-        <div style="display:flex; justify-content:space-between;">
-            <a href="/thread/{{ thread.id }}">Thread #{{ thread.id }}</a>
-            <small>{{ thread.created_at }}</small>
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:0.5rem;">
+            <div>
+                <a href="/thread/{{ thread.id }}">Thread #{{ thread.id }}</a><br>
+                <small>{{ thread.created_at }}</small>
+            </div>
+            <form action="/thread/{{ thread.id }}/delete" method="post" onsubmit="return confirm('Delete thread #{{ thread.id }}? This cannot be undone.');">
+                <button class="btn btn-danger" style="font-size:0.8em;">Delete</button>
+            </form>
         </div>
         <small>CWD: {{ thread.cwd }}</small><br>
         {% if thread.context_summary %}

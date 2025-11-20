@@ -236,6 +236,17 @@ def fork_thread(thread_id):
     conn.close()
     return redirect(url_for('view_thread', thread_id=new_id))
 
+@app.route('/thread/<int:thread_id>/delete', methods=['POST'])
+def delete_thread(thread_id):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM threads WHERE id = %s", (thread_id,))
+    cur.close()
+    conn.close()
+    PENDING_APPROVALS.pop(thread_id, None)
+    flash(f"Thread #{thread_id} deleted.", "info")
+    return redirect(url_for('index'))
+
 # --- Admin Routes ---
 
 @app.route('/admin/llm')
@@ -333,4 +344,4 @@ if __name__ == '__main__':
     print("Initializing DB...")
     init_db()
     print("Starting app...")
-    app.run(host='0.0.0.0', port=5000)
+    app.run(host='0.0.0.0', port=5000, threaded=True)
