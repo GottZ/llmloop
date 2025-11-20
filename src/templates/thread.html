@@ -8,6 +8,7 @@
         </form>
     </div>
 </div>
+<div id="status-indicator" class="status-pill status-idle" style="margin-bottom:0.5rem;">Idle</div>
 
 <div id="pending-approval" class="alert alert-warning" style="{% if not pending_approval %}display:none;{% endif %}">
     <h3>Approval Required</h3>
@@ -63,9 +64,11 @@
 (function() {
     const threadId = {{ thread.id }};
     const messagesEl = document.getElementById('messages');
+    const statusEl = document.getElementById('status-indicator');
     if (!messagesEl) {
         return;
     }
+    updateStatus('idle');
     let lastId = Number(messagesEl.dataset.lastId || 0);
     const eventSource = new EventSource(`/thread/${threadId}/events?after=${lastId}`);
     eventSource.onmessage = function(event) {
@@ -78,6 +81,8 @@
                 appendMessage(payload);
             } else if (payload.type === 'pending') {
                 updatePending(payload);
+            } else if (payload.type === 'status') {
+                updateStatus(payload.state);
             }
         } catch (err) {
             console.error('Failed to parse SSE payload', err);
@@ -114,6 +119,19 @@
             list.appendChild(li);
         });
         block.style.display = '';
+    }
+
+    function updateStatus(state) {
+        if (!statusEl) {
+            return;
+        }
+        const labelMap = {
+            running: 'Working…',
+            waiting_approval: 'Waiting for approval',
+            idle: 'Idle'
+        };
+        statusEl.textContent = labelMap[state] || state;
+        statusEl.className = `status-pill status-${state}`;
     }
 
     function roleColor(role) {

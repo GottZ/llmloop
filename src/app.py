@@ -18,6 +18,24 @@ app.config.from_object(Config)
 # Global state for HITL (simple in-memory storage for this demo)
 # Key: thread_id, Value: {tool_history: [], runner_resp: "", commands: []}
 PENDING_APPROVALS = {}
+# Track thread-level activity for SSE status updates
+THREAD_STATUSES = {}
+
+
+def set_thread_status(thread_id, state):
+    THREAD_STATUSES[thread_id] = {"state": state, "token": uuid.uuid4().hex}
+
+
+def get_thread_status(thread_id):
+    status = THREAD_STATUSES.get(thread_id)
+    if status:
+        return status
+    # Deterministic token so SSE consumers still get an initial state
+    return {"state": "idle", "token": f"idle-{thread_id}"}
+
+
+def clear_thread_status(thread_id):
+    THREAD_STATUSES.pop(thread_id, None)
 
 @app.route('/')
 def index():
@@ -39,6 +57,7 @@ def new_thread():
     cur.execute("INSERT INTO threads (cwd, context_summary) VALUES (%s, '') RETURNING id", (cwd,))
     thread_id = cur.fetchone()[0]
     conn.close()
+    set_thread_status(thread_id, "idle")
     return redirect(url_for('view_thread', thread_id=thread_id))
 
 @app.route('/thread/<int:thread_id>')
@@ -76,7 +95,10 @@ def thread_events(thread_id):
         extras = import_extras()
         last_id = after
         last_pending_token = None
+        status_info = get_thread_status(thread_id)
+        last_status_token = status_info['token']
         last_heartbeat = time.time()
+        yield f"data: {json.dumps({'type': 'status', 'state': status_info['state']})}\n\n"
         try:
             while True:
                 with conn.cursor(cursor_factory=extras.RealDictCursor) as cur:
@@ -106,6 +128,10 @@ def thread_events(thread_id):
                         "commands": pending['commands'] if pending else []
                     }
                     yield f"data: {json.dumps(payload)}\n\n"
+                status_state = get_thread_status(thread_id)
+                if status_state['token'] != last_status_token:
+                    last_status_token = status_state['token']
+                    yield f"data: {json.dumps({'type': 'status', 'state': status_state['state']})}\n\n"
                 now = time.time()
                 if now - last_heartbeat >= 15:
                     yield ": keep-alive\n\n"
@@ -125,7 +151,12 @@ def send_message(thread_id):
     wants_json = request.accept_mimetypes.best_match(['application/json', 'text/html']) == 'application/json'
     
     orch = Orchestrator(thread_id)
-    result = orch.process_user_message(user_input, use_tools, hitl, continuous_intent)
+    set_thread_status(thread_id, "running")
+    try:
+        result = orch.process_user_message(user_input, use_tools, hitl, continuous_intent)
+    except Exception:
+        set_thread_status(thread_id, "idle")
+        raise
     
     response_body = {"status": result.get('status')}
     
@@ -134,14 +165,17 @@ def send_message(thread_id):
         pending['continuous_intent'] = continuous_intent
         pending['token'] = uuid.uuid4().hex
         PENDING_APPROVALS[thread_id] = pending
+        set_thread_status(thread_id, "waiting_approval")
         if not wants_json:
             flash("Approval required for tool execution.", "warning")
     elif result['status'] == 'error':
         response_body['error'] = result.get('error')
+        set_thread_status(thread_id, "idle")
         if not wants_json:
             flash(f"Error: {result.get('error')}", "danger")
     else:
         response_body['status'] = 'complete'
+        set_thread_status(thread_id, "idle")
     
     if wants_json:
         return jsonify(response_body)
@@ -166,13 +200,24 @@ def approve_tools(thread_id):
 
     # Resume
     orch = Orchestrator(thread_id)
+    set_thread_status(thread_id, "running")
     continuous_intent = pending.get('continuous_intent', True)
-    result = orch.resume_tool_loop_after_approval(
-        pending['tool_history'], pending['runner_resp'], pending['commands'], continuous_intent
-    )
+    try:
+        result = orch.resume_tool_loop_after_approval(
+            pending['tool_history'], pending['runner_resp'], pending['commands'], continuous_intent
+        )
+    except Exception:
+        set_thread_status(thread_id, "idle")
+        raise
     
     if result['status'] == 'error':
         flash(f"Error: {result.get('error')}", "danger")
+        set_thread_status(thread_id, "idle")
+    elif result['status'] == 'approval_required':
+        # Nested approval currently unsupported but keep status consistent
+        set_thread_status(thread_id, "waiting_approval")
+    else:
+        set_thread_status(thread_id, "idle")
         
     return redirect(url_for('view_thread', thread_id=thread_id))
 
@@ -194,6 +239,7 @@ def retry_last(thread_id):
          return redirect(url_for('view_thread', thread_id=thread_id))
 
     orch = Orchestrator(thread_id)
+    set_thread_status(thread_id, "running")
 
     # If the last response was from the planner, reuse its TOOL_INTENT so the
     # tool runner can evaluate the pending commands without waiting for another
@@ -202,15 +248,29 @@ def retry_last(thread_id):
         intent = orch._extract_tag(last_msg['content'], "TOOL_INTENT") if last_msg['content'] else None
         if not intent or intent.lower().strip() == "none":
             flash("Last planner message did not include a runnable tool intent.", "info")
+            set_thread_status(thread_id, "idle")
             return redirect(url_for('view_thread', thread_id=thread_id))
-        result = orch.run_tool_loop(intent, hitl=False, continuous_intent=True)
+        try:
+            result = orch.run_tool_loop(intent, hitl=False, continuous_intent=True)
+        except Exception:
+            set_thread_status(thread_id, "idle")
+            raise
     else:
         # Otherwise, fall back to rerunning the planner loop using the current
         # conversation state.
-        result = orch.run_planner_loop(use_tools=True, hitl=False, continuous_intent=True)
+        try:
+            result = orch.run_planner_loop(use_tools=True, hitl=False, continuous_intent=True)
+        except Exception:
+            set_thread_status(thread_id, "idle")
+            raise
     
     if result['status'] == 'error':
         flash(f"Retry Error: {result.get('error')}", "danger")
+        set_thread_status(thread_id, "idle")
+    elif result['status'] == 'approval_required':
+        set_thread_status(thread_id, "waiting_approval")
+    else:
+        set_thread_status(thread_id, "idle")
 
     return redirect(url_for('view_thread', thread_id=thread_id))
 
@@ -244,6 +304,7 @@ def delete_thread(thread_id):
     cur.close()
     conn.close()
     PENDING_APPROVALS.pop(thread_id, None)
+    clear_thread_status(thread_id)
     flash(f"Thread #{thread_id} deleted.", "info")
     return redirect(url_for('index'))
 
