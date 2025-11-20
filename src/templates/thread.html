@@ -104,6 +104,8 @@
 <div class="alert alert-danger">LLM Backend not configured.</div>
 {% endif %}
 
+<div id="scroll-anchor" style="height:1px;"></div>
+
 <script>
 (function() {
     const threadId = {{ thread.id }};
@@ -117,11 +119,13 @@
     const streamBox = document.getElementById('streaming-output');
     const streamRoleEl = document.getElementById('stream-role');
     const streamContentEl = document.getElementById('stream-content');
+    const scrollAnchor = document.getElementById('scroll-anchor');
     let activeStreamRole = '';
     let totalTokens = Number(messagesEl?.dataset.totalTokens || 0);
     const contextLimit = Number(messagesEl?.dataset.contextLimit || 0);
     let summaryTokens = Number(messagesEl?.dataset.summaryTokens || 0);
     let contextQueue = [];
+    let stickToBottom = true;
     let queueLength = Number(statusFrame?.dataset.queueLength || 0);
     try {
         contextQueue = JSON.parse(messagesEl?.dataset.contextList || '[]');
@@ -133,6 +137,12 @@
     }
     updateStatus('idle');
     refreshTokenDisplays();
+    if (scrollAnchor && 'IntersectionObserver' in window) {
+        const observer = new IntersectionObserver(function(entries) {
+            stickToBottom = entries.some(function(entry) { return entry.isIntersecting; });
+        }, { root: null, threshold: 0.95 });
+        observer.observe(scrollAnchor);
+    }
     let lastId = Number(messagesEl.dataset.lastId || 0);
     const eventSource = new EventSource(`/thread/${threadId}/events?after=${lastId}`);
     eventSource.onmessage = function(event) {
@@ -169,6 +179,7 @@
         messagesEl.scrollTop = messagesEl.scrollHeight;
         clearActiveStream(msg.role);
         updateTokenStatsFromMessage(msg.content);
+        scrollIfNeeded();
     }
 
     function updatePending(payload) {
@@ -247,6 +258,7 @@
         streamRoleEl.textContent = `${role.toUpperCase()} (streaming)`;
         streamContentEl.textContent += payload.chunk || '';
         streamBox.style.display = '';
+        scrollIfNeeded();
     }
 
     function clearActiveStream(role) {
@@ -270,6 +282,15 @@
             streamRoleEl.textContent = '';
         }
         activeStreamRole = '';
+    }
+
+    function scrollIfNeeded() {
+        if (!stickToBottom || !scrollAnchor) {
+            return;
+        }
+        requestAnimationFrame(function() {
+            scrollAnchor.scrollIntoView({ block: 'end', behavior: 'auto' });
+        });
     }
 
     function updateTokenStatsFromMessage(content) {
