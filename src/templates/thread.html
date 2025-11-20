@@ -344,13 +344,6 @@
     const textInput = document.getElementById('thread-input');
     function submitForm(evt) {
         evt.preventDefault();
-        if (form.dataset.sending === '1') {
-            return;
-        }
-        form.dataset.sending = '1';
-        if (submitBtn) {
-            submitBtn.disabled = true;
-        }
         const formData = new FormData(form);
         if (textInput) {
             textInput.value = '';
@@ -375,11 +368,6 @@
             }
         }).catch(function() {
             showStatus('Failed to send message.', 'danger');
-        }).finally(function() {
-            form.dataset.sending = '';
-            if (submitBtn) {
-                submitBtn.disabled = false;
-            }
         });
     }
 
