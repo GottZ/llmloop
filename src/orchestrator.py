@@ -98,7 +98,7 @@ class Orchestrator:
             if summary:
                 self._update_summary(summary)
 
-            if not use_tools or not intent or intent.lower().strip() == "none":
+            if not use_tools or self._intent_means_none(intent):
                 return {"status": "complete"}
 
             # 3. Tool Runner Loop
@@ -216,7 +216,7 @@ class Orchestrator:
                 self._update_summary(summary)
 
             followup_intent = self._extract_tag(final_resp, "TOOL_INTENT")
-            if followup_intent and followup_intent.lower().strip() != "none" and continuous_intent:
+            if followup_intent and not self._intent_means_none(followup_intent) and continuous_intent:
                 return self.run_tool_loop(followup_intent, hitl, continuous_intent)
             
             return {"status": "complete"}
@@ -262,6 +262,24 @@ class Orchestrator:
         if not tool_outputs:
             return
         self._save_message("tool_context", f"TOOL_CONTEXT:\n{tool_outputs}")
+
+    def _intent_means_none(self, intent):
+        if not intent:
+            return True
+        cleaned = intent.strip().lower()
+        cleaned = cleaned.rstrip(".! ")
+        cleaned = cleaned.replace("-", " ").strip()
+        synonyms = {
+            "none",
+            "no tools",
+            "no tool",
+            "no tool needed",
+            "no tooling",
+            "nothing",
+            "no further action",
+            "no further actions",
+        }
+        return cleaned in synonyms
 
     def _call_llm(self, role, messages):
         stream = getattr(self, "stream_tokens", False)
