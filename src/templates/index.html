@@ -18,6 +18,7 @@
             <option value="local">Existing path (inside container)</option>
             <option value="upload">Upload archive</option>
             <option value="git">GitHub / Git clone URL</option>
+            <option value="upload_prepared" style="display:none;">Prepared Upload</option>
         </select>
 
         <div id="local-input">
@@ -122,7 +123,11 @@
                 body: formData,
             });
             if (!resp.ok) {
-                await fetch('/thread/upload/cancel', { method: 'POST', body: new URLSearchParams({ workspace_id: workspaceId }) });
+                await fetch('/thread/upload/cancel', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: new URLSearchParams({ workspace_id: workspaceId })
+                });
                 const errorText = await resp.text();
                 throw new Error(errorText || 'Upload failed.');
             }

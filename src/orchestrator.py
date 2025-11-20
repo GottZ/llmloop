@@ -11,6 +11,10 @@ from psycopg2.extras import RealDictCursor
 from token_stream import push_token
 
 PLANNER_HISTORY_LIMIT = 6
+MAX_OUTPUT_LINES = 400
+OUTPUT_HEAD_LINES = 200
+OUTPUT_TAIL_LINES = 50
+MAX_OUTPUT_CHARS = 12000
 
 logger = logging.getLogger(__name__)
 
@@ -263,6 +267,30 @@ class Orchestrator:
             return
         self._save_message("tool_context", f"TOOL_CONTEXT:\n{tool_outputs}")
 
+    def _compact_stream(self, content):
+        if not content:
+            return "", False, None
+        lines = content.splitlines()
+        original_line_count = len(lines)
+        truncated = False
+        note_parts = []
+        if original_line_count > MAX_OUTPUT_LINES:
+            head = lines[:OUTPUT_HEAD_LINES]
+            tail = lines[-OUTPUT_TAIL_LINES:] if OUTPUT_TAIL_LINES else []
+            omitted = original_line_count - (len(head) + len(tail))
+            marker = f"... ({omitted} more lines omitted) ..."
+            lines = head + [marker] + tail
+            truncated = True
+            note_parts.append(f"Trimmed to first {OUTPUT_HEAD_LINES} and last {OUTPUT_TAIL_LINES} of {original_line_count} lines.")
+        compacted = "\n".join(lines)
+        if len(compacted) > MAX_OUTPUT_CHARS:
+            truncated = True
+            omitted_chars = len(compacted) - MAX_OUTPUT_CHARS
+            compacted = compacted[:MAX_OUTPUT_CHARS] + f"\n... ({omitted_chars} characters omitted) ..."
+            note_parts.append(f"Trimmed to {MAX_OUTPUT_CHARS} characters.")
+        note = " ".join(note_parts) if note_parts else None
+        return compacted, truncated, note
+
     def _intent_means_none(self, intent):
         if not intent:
             return True
@@ -293,8 +321,10 @@ class Orchestrator:
         return _inner
 
     def _format_command_output(self, cmd, exit_code, stdout, stderr, error_message=None, annotation=None):
-        stdout_box = self._wrap_stream("STDOUT", stdout or "")
-        stderr_box = self._wrap_stream("STDERR", stderr or "")
+        stdout_compacted, stdout_trunc, stdout_note = self._compact_stream(stdout or "")
+        stderr_compacted, stderr_trunc, stderr_note = self._compact_stream(stderr or "")
+        stdout_box = self._wrap_stream("STDOUT", stdout_compacted)
+        stderr_box = self._wrap_stream("STDERR", stderr_compacted)
         parts = [
             f"CMD: {cmd}",
             f"EXIT: {exit_code}",
@@ -305,8 +335,17 @@ class Orchestrator:
         ]
         if error_message:
             parts.append(f"ERROR: {error_message}")
+        notes = []
         if annotation:
-            parts.append(annotation)
+            notes.append(annotation)
+        if stdout_trunc:
+            notes.append(stdout_note or "STDOUT truncated; consider narrowing the command.")
+        if stderr_trunc:
+            notes.append(stderr_note or "STDERR truncated; consider narrowing the command.")
+        if stdout_trunc and "tree" in cmd:
+            notes.append("Hint: tree outputs are large; try limiting depth (e.g., `tree -L 2 <path>`).")
+        if notes:
+            parts.append("NOTES:\n" + "\n".join(notes))
         return "\n".join(parts)
 
     def _wrap_stream(self, label, content):

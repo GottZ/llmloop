@@ -100,7 +100,7 @@ def _prepare_upload_workspace(upload_files):
     with zipfile.ZipFile(archive_path, "r") as archive:
         archive.extractall(workspace)
     shutil.rmtree(archive_dir, ignore_errors=True)
-    return workspace
+    return _finalize_workspace(workspace)
 
 
 def _prepare_git_workspace(git_url):
@@ -118,10 +118,29 @@ def _prepare_git_workspace(git_url):
         if result.returncode != 0:
             stderr = (result.stderr or "").strip()
             raise ValueError(f"Git clone failed: {stderr[:200]}")
-        return workspace
+        return _finalize_workspace(workspace)
     except Exception:
         shutil.rmtree(workspace, ignore_errors=True)
         raise
+
+
+def _finalize_workspace(path):
+    if not path or not os.path.isdir(path):
+        return path
+    for artifact in ("__MACOSX", ".DS_Store"):
+        target = os.path.join(path, artifact)
+        if os.path.isdir(target):
+            shutil.rmtree(target, ignore_errors=True)
+        elif os.path.isfile(target):
+            os.remove(target)
+    entries = [entry for entry in os.listdir(path) if entry not in ("__MACOSX", ".DS_Store")]
+    if len(entries) == 1:
+        child = os.path.join(path, entries[0])
+        if os.path.isdir(child):
+            for item in os.listdir(child):
+                shutil.move(os.path.join(child, item), os.path.join(path, item))
+            os.rmdir(child)
+    return path
 
 @app.route('/')
 def index():
@@ -147,6 +166,7 @@ def new_thread():
             cwd = UPLOAD_WORKSPACES.pop(workspace_id, None)
             if not cwd or not os.path.isdir(cwd):
                 raise ValueError("Uploaded workspace expired or missing. Please upload again.")
+            cwd = _finalize_workspace(cwd)
         elif source_type == 'git':
             git_url = request.form.get('git_url', '').strip()
             cwd = _prepare_git_workspace(git_url)
