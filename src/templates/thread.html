@@ -8,7 +8,6 @@
         </form>
     </div>
 </div>
-<div id="status-indicator" class="status-pill status-idle" style="margin-bottom:0.5rem;">Idle</div>
 
 <div id="pending-approval" class="alert alert-warning" style="{% if not pending_approval %}display:none;{% endif %}">
     <h3>Approval Required</h3>
@@ -26,7 +25,13 @@
     </form>
 </div>
 {% set last_id = messages[-1].id if messages else 0 %}
-<div id="messages" data-last-id="{{ last_id }}" style="margin-bottom: 2rem;">
+<div id="messages"
+     data-last-id="{{ last_id }}"
+     data-total-tokens="{{ stats.total_tokens }}"
+     data-context-limit="{{ stats.context_limit }}"
+     data-summary-tokens="{{ stats.summary_tokens }}"
+     data-context-list='{{ stats.context_queue|tojson }}'
+     style="margin-bottom: 2rem;">
     {% for msg in messages %}
     <div class="card" style="border-left: 4px solid 
         {% if msg.role == 'user' %}var(--primary)
@@ -38,6 +43,20 @@
         <pre style="white-space: pre-wrap;">{{ msg.content }}</pre>
     </div>
     {% endfor %}
+</div>
+
+<div id="status-frame" class="status-frame"
+    data-total-tokens="{{ stats.total_tokens }}"
+    data-context-tokens="{{ stats.context_tokens }}"
+    data-context-limit="{{ stats.context_limit }}"
+    data-summary-tokens="{{ stats.summary_tokens }}"
+    data-context-list='{{ stats.context_queue|tojson }}'>
+    <div id="status-indicator" class="status-pill status-idle">Idle</div>
+    <div class="status-metrics">
+        <div>Total tokens: <span id="total-token-count">{{ stats.total_tokens }}</span></div>
+        <div>Context tokens: <span id="context-token-count">{{ stats.context_tokens }}</span></div>
+        <div>Context window: <span id="context-window-size">{{ stats.context_limit }}</span></div>
+    </div>
 </div>
 
 <div id="streaming-output" class="card" style="display:none;">
@@ -71,14 +90,28 @@
     const threadId = {{ thread.id }};
     const messagesEl = document.getElementById('messages');
     const statusEl = document.getElementById('status-indicator');
+    const statusFrame = document.getElementById('status-frame');
+    const totalTokenDisplay = document.getElementById('total-token-count');
+    const contextTokenDisplay = document.getElementById('context-token-count');
+    const contextWindowDisplay = document.getElementById('context-window-size');
     const streamBox = document.getElementById('streaming-output');
     const streamRoleEl = document.getElementById('stream-role');
     const streamContentEl = document.getElementById('stream-content');
     let activeStreamRole = '';
+    let totalTokens = Number(messagesEl?.dataset.totalTokens || 0);
+    const contextLimit = Number(messagesEl?.dataset.contextLimit || 0);
+    let summaryTokens = Number(messagesEl?.dataset.summaryTokens || 0);
+    let contextQueue = [];
+    try {
+        contextQueue = JSON.parse(messagesEl?.dataset.contextList || '[]');
+    } catch (err) {
+        contextQueue = [];
+    }
     if (!messagesEl) {
         return;
     }
     updateStatus('idle');
+    refreshTokenDisplays();
     let lastId = Number(messagesEl.dataset.lastId || 0);
     const eventSource = new EventSource(`/thread/${threadId}/events?after=${lastId}`);
     eventSource.onmessage = function(event) {
@@ -112,6 +145,7 @@
         messagesEl.appendChild(card);
         messagesEl.scrollTop = messagesEl.scrollHeight;
         clearActiveStream(msg.role);
+        updateTokenStatsFromMessage(msg.content);
     }
 
     function updatePending(payload) {
@@ -206,6 +240,48 @@
             streamRoleEl.textContent = '';
         }
         activeStreamRole = '';
+    }
+
+    function updateTokenStatsFromMessage(content) {
+        const tokens = estimateTokens(content);
+        if (!Number.isFinite(tokens) || tokens <= 0) {
+            return;
+        }
+        totalTokens += tokens;
+        if (contextLimit > 0) {
+            contextQueue.push(tokens);
+            while (contextQueue.length > contextLimit) {
+                contextQueue.shift();
+            }
+        }
+        refreshTokenDisplays();
+    }
+
+    function refreshTokenDisplays() {
+        if (totalTokenDisplay) {
+            totalTokenDisplay.textContent = totalTokens.toString();
+        }
+        if (contextTokenDisplay) {
+            const contextTokens = summaryTokens + contextQueue.reduce((acc, val) => acc + val, 0);
+            contextTokenDisplay.textContent = contextTokens.toString();
+        }
+        if (contextWindowDisplay && contextLimit) {
+            contextWindowDisplay.textContent = contextLimit.toString();
+        }
+        if (messagesEl) {
+            messagesEl.dataset.totalTokens = totalTokens.toString();
+        }
+    }
+
+    function estimateTokens(text) {
+        if (!text) {
+            return 0;
+        }
+        const trimmed = text.trim();
+        if (!trimmed) {
+            return 0;
+        }
+        return Math.max(1, trimmed.split(/\s+/).length);
     }
 
     const form = document.getElementById('message-form');

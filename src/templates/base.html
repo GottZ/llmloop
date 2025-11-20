@@ -46,6 +46,26 @@
         .status-pill.status-running::before { background: var(--warning); }
         .status-pill.status-waiting_approval::before { background: var(--primary); }
         .status-pill.status-idle::before { background: #28a745; }
+        .status-frame {
+            border: 1px solid var(--border);
+            padding: 1rem;
+            border-radius: 4px;
+            margin-bottom: 1.5rem;
+            background: var(--header);
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem;
+            align-items: center;
+        }
+        .status-metrics {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1.5rem;
+            font-size: 0.95rem;
+        }
+        .status-metrics span {
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>

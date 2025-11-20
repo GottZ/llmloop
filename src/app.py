@@ -6,7 +6,7 @@ import uuid
 from flask import Flask, render_template, request, redirect, url_for, flash, session, Response, stream_with_context, jsonify
 from config import Config
 from db import init_db, wait_for_db, get_db_connection, get_active_backend
-from orchestrator import Orchestrator
+from orchestrator import Orchestrator, PLANNER_HISTORY_LIMIT
 from llm_client import list_models, LLMError
 from token_stream import pop_tokens, clear_tokens
 
@@ -37,6 +37,17 @@ def get_thread_status(thread_id):
 
 def clear_thread_status(thread_id):
     THREAD_STATUSES.pop(thread_id, None)
+
+
+def estimate_tokens(text):
+    if not text:
+        return 0
+    stripped = text.strip()
+    if not stripped:
+        return 0
+    # Rough heuristic: word count approximates token count for display purposes
+    parts = stripped.split()
+    return max(1, len(parts))
 
 @app.route('/')
 def index():
@@ -80,12 +91,30 @@ def view_thread(thread_id):
     
     backend = get_active_backend()
     pending_approval = PENDING_APPROVALS.get(thread_id)
+
+    total_tokens = sum(estimate_tokens(msg['content']) for msg in messages)
+    context_limit = PLANNER_HISTORY_LIMIT or len(messages) or 0
+    if context_limit > 0:
+        context_subset = messages[-context_limit:]
+    else:
+        context_subset = messages
+    context_queue = [estimate_tokens(msg['content']) for msg in context_subset]
+    context_summary_tokens = estimate_tokens(thread['context_summary']) if thread and thread.get('context_summary') else 0
+    context_tokens = context_summary_tokens + sum(context_queue)
+    stats = {
+        "total_tokens": total_tokens,
+        "context_tokens": context_tokens,
+        "context_limit": context_limit,
+        "context_queue": context_queue,
+        "summary_tokens": context_summary_tokens
+    }
     
     return render_template('thread.html', 
                            thread=thread, 
                            messages=messages, 
                            backend=backend,
-                           pending_approval=pending_approval)
+                           pending_approval=pending_approval,
+                           stats=stats)
 
 @app.route('/thread/<int:thread_id>/events')
 def thread_events(thread_id):
