@@ -62,6 +62,7 @@ Environment variables (see `docker-compose.yml`):
   These are intercepted server-side; no actual shell command is run.
 - Available CLI tools inside the container include git, curl, rg (ripgrep), tree, fd, sed, python, node, npm, gcc, apply_patch, and more—prefer these over fabricating code.
 - Every shell command’s STDOUT/STDERR is wrapped in randomized boundary lines (e.g., `@@STDOUT_<token>@@ … @@STDOUT_<token>@@`) so tool output can contain arbitrary text—including the strings `RUN:` or `RESULT:`—without breaking the protocol. Both prompts explain how to strip/ignore the markers.
+- Directory listings may include a `RELATIVE_PATHS` block that already prefixes each entry with the correct subdirectory; copy these relative paths into follow-up commands so context compression never drops directory information.
 
 ## Administering LLM Backends
 

@@ -232,7 +232,8 @@ class Orchestrator:
                 output = self._handle_history_command(stripped)
                 stdout = output or ""
                 stderr = ""
-                output_buffer.append(self._format_command_output(cmd, 0, stdout, stderr))
+                annotation = self._relative_path_annotation(cmd)
+                output_buffer.append(self._format_command_output(cmd, 0, stdout, stderr, annotation=annotation))
                 continue
             try:
                 # Run command
@@ -241,10 +242,12 @@ class Orchestrator:
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30
                 )
                 self._save_tool_run(cmd, proc.stdout, proc.stderr, proc.returncode)
-                output_buffer.append(self._format_command_output(cmd, proc.returncode, proc.stdout, proc.stderr))
+                annotation = self._relative_path_annotation(cmd)
+                output_buffer.append(self._format_command_output(cmd, proc.returncode, proc.stdout, proc.stderr, annotation=annotation))
             except Exception as e:
                 self._save_tool_run(cmd, "", str(e), -1)
-                output_buffer.append(self._format_command_output(cmd, -1, "", str(e), error_message=str(e)))
+                annotation = self._relative_path_annotation(cmd)
+                output_buffer.append(self._format_command_output(cmd, -1, "", str(e), error_message=str(e), annotation=annotation))
         return "\n".join(output_buffer)
 
     def _extract_tag(self, text, tag):
@@ -257,7 +260,7 @@ class Orchestrator:
             return
         self._save_message("tool_context", f"TOOL_CONTEXT:\n{tool_outputs}")
 
-    def _format_command_output(self, cmd, exit_code, stdout, stderr, error_message=None):
+    def _format_command_output(self, cmd, exit_code, stdout, stderr, error_message=None, annotation=None):
         stdout_box = self._wrap_stream("STDOUT", stdout or "")
         stderr_box = self._wrap_stream("STDERR", stderr or "")
         parts = [
@@ -270,6 +273,8 @@ class Orchestrator:
         ]
         if error_message:
             parts.append(f"ERROR: {error_message}")
+        if annotation:
+            parts.append(annotation)
         return "\n".join(parts)
 
     def _wrap_stream(self, label, content):
@@ -278,6 +283,43 @@ class Orchestrator:
         if not content.endswith("\n"):
             content = content + "\n" if content else ""
         return f"{boundary}\n{content}{boundary}"
+
+    def _relative_path_annotation(self, cmd):
+        try:
+            tokens = shlex.split(cmd)
+        except ValueError:
+            return None
+        if not tokens:
+            return None
+        if tokens[0] != "ls":
+            return None
+        targets = [tok for tok in tokens[1:] if not tok.startswith("-")]
+        if not targets:
+            return None
+        lines = []
+        for rel_target in targets:
+            if rel_target.startswith("/"):
+                # absolute path already explicit
+                continue
+            abs_target = os.path.normpath(os.path.join(self.cwd, rel_target))
+            if not os.path.exists(abs_target):
+                continue
+            if os.path.isdir(abs_target):
+                try:
+                    entries = sorted(os.listdir(abs_target))
+                except OSError:
+                    continue
+                lines.append(f"{rel_target.rstrip('/')}/:")
+                max_entries = 200
+                for entry in entries[:max_entries]:
+                    lines.append(f"  {rel_target.rstrip('/')}/{entry}")
+                if len(entries) > max_entries:
+                    lines.append("  ...")
+            else:
+                lines.append(rel_target)
+        if lines:
+            return "RELATIVE_PATHS:\n" + "\n".join(lines)
+        return None
 
     def _handle_history_command(self, command):
         tokens = shlex.split(command)
